@@ -1,0 +1,65 @@
+name: Alerta de queda
+
+# Testa os sites e a API a cada 10 minutos. Se algum cair, o job falha
+# e o GitHub manda e-mail para o dono do repositório.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  checar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Sites e API
+        run: |
+          sites="
+          https://airops.valleadm.com.br/login
+          https://www.valleairops.com.br/
+          https://eventos.valleadm.com.br/
+          https://service.valleadm.com.br/
+          https://master.valleadm.com.br/
+          https://valleadm.com.br/
+          https://bi.valleadm.com.br/
+          https://aeroshowsinop.com.br/
+          https://www.pedeepag.com.br/
+          https://agronoticiasbr.com.br/
+          https://eobrasil.com.br/
+          "
+          falhas=""
+          checar() {
+            # duas tentativas para não acusar oscilação de um segundo
+            for t in 1 2; do
+              code=$(curl -s -o /dev/null -L -m 25 -w "%{http_code}" "$1")
+              case "$code" in 2*|3*) echo "OK   $code $1"; return 0;; esac
+              sleep 10
+            done
+            echo "FORA $code $1"
+            falhas="$falhas\n$1 ($code)"
+          }
+          for s in $sites; do checar "$s"; done
+
+          health=$(curl -s -m 25 https://api.valleadm.com.br/api/v1/health || true)
+          if echo "$health" | grep -q '"db":"ok"'; then
+            echo "OK   API e banco"
+          else
+            echo "FORA API ou banco: $health"
+            falhas="$falhas\nAPI ou banco: $health"
+          fi
+
+          if [ -n "$falhas" ]; then
+            printf "Fora do ar:$falhas\n" >> "$GITHUB_STEP_SUMMARY"
+            printf "Fora do ar:$falhas\n"
+            exit 1
+          fi
+
+      - name: Manter o agendamento ligado
+        # O GitHub desliga agendamentos de repo sem atividade em 60 dias.
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/uptime.yml/enable" || true
